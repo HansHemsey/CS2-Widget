@@ -22,29 +22,24 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  background:
-    radial-gradient(circle at 10% 10%, #1a1a1a 0%, transparent 42%),
-    radial-gradient(circle at 80% 80%, #1f1f1f 0%, transparent 50%),
-    var(--bg);
+  min-height: 0;
+  display: block;
+  padding: 0;
+  background: transparent;
   color: var(--text);
   font-family: "Rajdhani", "Inter", system-ui, sans-serif;
 }
 
 .widget {
   width: min(100%, 480px);
-  border-radius: 14px;
-  border: 1px solid #242424;
-  background: linear-gradient(180deg, #171717 0%, #101010 100%);
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.42);
-  padding: 12px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
 }
 
 .widget__header {
-  margin-bottom: 8px;
+  display: none !important;
 }
 
 .widget__header h1 {
@@ -56,17 +51,13 @@ body {
 }
 
 .widget-section {
-  border-radius: 12px;
-  border: 1px solid var(--surface-border);
-  background: var(--surface);
-  padding: 8px;
+  border: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
+  display: none !important;
 }
 
 .section-heading h2,
@@ -127,6 +118,7 @@ body {
   object-fit: cover;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: #222;
+  display: none !important;
 }
 
 .faceit-hud__content {
@@ -142,6 +134,13 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+}
+
+.faceit-hud__player {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .faceit-hud__top h3 {
@@ -180,22 +179,60 @@ body {
   box-shadow: 0 0 16px rgba(255, 40, 40, 0.52);
 }
 
+.faceit-level-badge[hidden] {
+  display: none !important;
+}
+
 .faceit-top-rank {
+  display: none;
+}
+
+.faceit-top-rank.faceit-top-rank--challenger {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 38px;
-  height: 18px;
-  padding: 0 5px;
+  justify-content: flex-start;
+  min-width: 96px;
+  height: 28px;
+  padding: 0 34px 0 9px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 216, 106, 0.58);
-  background: linear-gradient(180deg, rgba(255, 226, 139, 0.18) 0%, rgba(45, 35, 12, 0.62) 100%);
-  color: #ffd56b;
-  font-size: 0.68rem;
-  font-weight: 800;
+  border: 2px solid rgba(255, 74, 81, 0.92);
+  background: #d52e33;
+  color: #121212;
+  font-size: 0.92rem;
+  font-weight: 900;
   line-height: 1;
   letter-spacing: 0.01em;
-  text-shadow: 0 0 8px rgba(255, 213, 107, 0.36);
+  text-shadow: none;
+  box-shadow:
+    0 0 14px rgba(213, 46, 51, 0.34),
+    inset 0 -1px 0 rgba(90, 12, 14, 0.4);
+}
+
+.faceit-top-rank.faceit-top-rank--challenger::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, #202020 0%, #0d0d0d 76%);
+  border: 1px solid rgba(255, 63, 70, 0.85);
+  box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.06);
+}
+
+.faceit-top-rank.faceit-top-rank--challenger::before {
+  content: "";
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  transform: translateY(-50%);
+  background: url("./images/faceit_elo/challenger.png") center / contain no-repeat;
+  z-index: 1;
 }
 
 .faceit-hud__stats {
@@ -271,8 +308,13 @@ body {
 }
 
 .country-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 22px;
   border-radius: 4px;
-  padding: 1px 5px;
+  padding: 0 6px;
   font-size: 0.72rem;
   background: rgba(25, 25, 25, 0.75);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -342,10 +384,6 @@ body {
   margin-top: 8px;
 }
 
-.section-heading--compact {
-  margin-bottom: 2px;
-}
-
 .section-error--inline-block {
   margin: 0 0 4px;
 }
@@ -360,16 +398,13 @@ body {
   --winprob-accent: #f4c430;
   border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--winprob-accent) 46%, #2f2f2f);
-  background:
-    linear-gradient(
-      110deg,
-      rgba(255, 255, 255, 0.04) 0%,
-      color-mix(in srgb, var(--winprob-accent) 14%, #111111) 46%,
-      #101010 100%
-    );
+  background: rgba(10, 12, 14, 0.92);
+  -webkit-backdrop-filter: blur(2px) saturate(85%);
+  backdrop-filter: blur(2px) saturate(85%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 0 10px color-mix(in srgb, var(--winprob-accent) 26%, transparent);
+    0 0 10px color-mix(in srgb, var(--winprob-accent) 20%, transparent),
+    0 2px 10px rgba(0, 0, 0, 0.32);
   padding: 4px 8px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -515,9 +550,7 @@ body {
 }
 
 .widget__footer {
-  margin-top: 8px;
-  font-size: 0.7rem;
-  color: #8b8b8b;
+  display: none !important;
 }
 
 @media (max-width: 520px) {
@@ -553,11 +586,22 @@ body {
     flex: 0 0 40px;
   }
 
-  .faceit-top-rank {
-    min-width: 34px;
-    height: 16px;
-    padding: 0 4px;
-    font-size: 0.62rem;
+  .faceit-top-rank.faceit-top-rank--challenger {
+    min-width: 88px;
+    height: 24px;
+    padding: 0 28px 0 7px;
+    font-size: 0.82rem;
+  }
+
+  .faceit-top-rank.faceit-top-rank--challenger::after {
+    width: 17px;
+    height: 17px;
+  }
+
+  .faceit-top-rank.faceit-top-rank--challenger::before {
+    right: 4px;
+    width: 11px;
+    height: 11px;
   }
 
   .premier-mini-value {

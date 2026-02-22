@@ -54,10 +54,11 @@ FACEIT_WEB_BASE      = "https://www.faceit.com"
 STATS_LIMIT          = 30        # matchs analysés par joueur (base_prob)
 ROUNDS_TO_WIN        = 13        # premier à 13 manches
 POLL_INTERVAL        = 115        # secondes entre chaque poll du score
-SCORE_BLEND_POWER    = 0.6       # vitesse à laquelle le score prend le dessus (0.5 = racine carrée)
-HISTORY_SCAN_LIMIT   = 30
+SCORE_BLEND_POWER    = 0.35      # plus bas = le score prend le dessus plus tôt
+SCORE_MIN_WEIGHT     = 0.25      # poids minimum accordé au score (même en début de match)
+SCORE_GAP_WEIGHT     = 0.55      # bonus de poids du score selon l'écart de rounds
+ROUND_WIN_BASE_INFLUENCE = 0.55  # réduit l'extrême de base_prob pour le calcul round-by-round
 ACTIVE_LOOKBACK_SEC  = 24 * 3600
-ACTIVE_LOOKAHEAD_SEC = 12 * 3600
 JSON_MARKER          = "__LIVEWINPROB_JSON__"
 
 WEIGHTS = {
@@ -133,15 +134,6 @@ def elo_to_level_label(elo: int) -> str:
             return f"Level {i+1}"
     return "Level 10"
 
-def color_prob(p: float) -> str:
-    pct = p * 100
-    if pct >= 60:
-        return f"{Fore.GREEN}{pct:.1f}%{Style.RESET_ALL}"
-    elif pct >= 45:
-        return f"{Fore.YELLOW}{pct:.1f}%{Style.RESET_ALL}"
-    else:
-        return f"{Fore.RED}{pct:.1f}%{Style.RESET_ALL}"
-
 def color_kd(kd: float) -> str:
     if kd >= 1.15:
         return f"{Fore.GREEN}{kd:.2f}{Style.RESET_ALL}"
@@ -211,10 +203,17 @@ def blend_probabilities(
     En fin de match : presque 100% basé sur le score.
     """
     rounds_played = our_rounds + enemy_rounds
-    max_rounds_before_win = 2 * (target - 1)  # 24 si target=13
+    max_rounds_before_win = max(1, 2 * (target - 1))  # 24 si target=13
+    progress = clamp(rounds_played / max_rounds_before_win)
 
-    # Poids [0, 1] croissant avec les rounds joués
-    weight = clamp(rounds_played / max_rounds_before_win) ** SCORE_BLEND_POWER
+    # Plus le match avance, plus on fait confiance au score en direct.
+    weight_progress = progress ** SCORE_BLEND_POWER
+
+    # Renforce encore l'influence du score quand l'écart de rounds se creuse.
+    round_gap = abs(our_rounds - enemy_rounds)
+    gap_boost = clamp(round_gap / max(1, target - 1)) * SCORE_GAP_WEIGHT
+
+    weight = clamp(max(weight_progress, SCORE_MIN_WEIGHT) + gap_boost, SCORE_MIN_WEIGHT, 0.97)
 
     return clamp(base_prob * (1 - weight) + score_prob * weight, 0.02, 0.98)
 
@@ -261,10 +260,6 @@ class FaceitClient:
 
     async def get_match(self, match_id: str) -> Optional[dict]:
         return await self._get(f"/matches/{match_id}")
-
-    async def search_players(self, nickname: str, limit: int = 20) -> Optional[dict]:
-        return await self._get("/search/players",
-                               {"nickname": nickname, "game": GAME_ID, "limit": limit})
 
 
 # ─── SCORE FETCHER (multi-source) ─────────────────────────────────────────────
@@ -489,14 +484,91 @@ def _extract_active_match_id(player_data: dict) -> str:
     return _find_match_id_deep(player_data)
 
 
-def _pick_current_match_from_history(items: list) -> Optional[dict]:
-    for m in items:
-        if is_active_status(m.get("status")):
-            return m
-    for m in items:
-        if not m.get("finished_at"):
-            return m
-    return None
+def _normalize_nickname(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).strip().casefold()
+
+
+def _extract_player_id_from_member(member: dict) -> str:
+    if not isinstance(member, dict):
+        return ""
+    for key in ("player_id", "playerId", "id", "user_id", "userId", "faceit_id", "faceitId"):
+        value = str(member.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _extract_player_nickname_from_member(member: dict) -> str:
+    if not isinstance(member, dict):
+        return ""
+    for key in ("nickname", "nick", "name", "game_player_name", "gamePlayerName"):
+        value = str(member.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _iter_team_members(team_data: dict):
+    if not isinstance(team_data, dict):
+        return
+
+    containers = [
+        team_data.get("roster"),
+        team_data.get("players"),
+        team_data.get("members"),
+        team_data.get("lineup"),
+        team_data.get("line_up"),
+    ]
+
+    for container in containers:
+        if isinstance(container, list):
+            for item in container:
+                if isinstance(item, dict):
+                    yield item
+        elif isinstance(container, dict):
+            for key, value in container.items():
+                if isinstance(value, dict):
+                    candidate = dict(value)
+                    if not _extract_player_id_from_member(candidate):
+                        candidate["player_id"] = str(key)
+                    yield candidate
+
+    captain = team_data.get("captain")
+    if isinstance(captain, dict):
+        yield captain
+    elif captain is not None:
+        yield {"player_id": str(captain)}
+
+
+def _resolve_player_faction(teams: dict, player_id: str, nickname_candidates: List[str]) -> str:
+    target_id = str(player_id or "").strip()
+    normalized_nicks = {_normalize_nickname(n) for n in nickname_candidates}
+    normalized_nicks.discard("")
+
+    for faction_key, faction_data in (teams or {}).items():
+        for member in _iter_team_members(faction_data):
+            member_id = _extract_player_id_from_member(member)
+            if target_id and member_id and member_id == target_id:
+                return faction_key
+
+            member_nick = _normalize_nickname(_extract_player_nickname_from_member(member))
+            if member_nick and member_nick in normalized_nicks:
+                return faction_key
+
+    return ""
+
+
+def _team_member_debug_preview(team_data: dict, limit: int = 5) -> str:
+    previews: List[str] = []
+    for member in _iter_team_members(team_data):
+        member_nick = _extract_player_nickname_from_member(member)
+        member_id = _extract_player_id_from_member(member)
+        label = member_nick or member_id
+        if label and label not in previews:
+            previews.append(label)
+        if len(previews) >= limit:
+            break
+    return ", ".join(previews)
 
 
 async def resolve_match_via_web_api(player_id: str) -> str:
@@ -536,9 +608,9 @@ async def resolve_match(
     client: FaceitClient,
     nickname: str,
     forced_match_id: str = "",
-) -> Tuple[str, str, str, dict]:
+) -> Tuple[str, str, str, str, dict]:
     """
-    Résout (player_id, match_id, faction_key, match_details).
+    Résout (player_id, match_id, our_faction, enemy_faction, match_details).
     Plusieurs strategies de fallback pour trouver le match actif.
     """
     print(f"\n{Fore.WHITE}[1/4] Résolution du joueur {Fore.CYAN}{nickname}{Fore.WHITE}...{Style.RESET_ALL}")
@@ -549,6 +621,7 @@ async def resolve_match(
     player_id = player_data["player_id"]
     player_details = await client.get_player(player_id) or player_data
     profile = player_details
+    resolved_nickname = str(profile.get("nickname") or player_data.get("nickname") or nickname or "").strip()
 
     game_data = (profile.get("games") or {}).get(GAME_ID) or {}
     our_elo   = game_data.get("faceit_elo", 1000)
@@ -603,16 +676,33 @@ async def resolve_match(
     if len(faction_keys) < 2:
         raise RuntimeError("Structure de teams inattendue dans le match.")
 
-    our_faction = None
-    for fk, fdata in teams.items():
-        for p in (fdata.get("roster") or []):
-            if p.get("player_id") == player_id or \
-               str(p.get("nickname", "")).lower() == nickname.lower():
-                our_faction = fk
-                break
+    our_faction = _resolve_player_faction(
+        teams,
+        player_id=player_id,
+        nickname_candidates=[nickname, resolved_nickname],
+    )
+    if not our_faction:
+        debug_lines = []
+        for fk in faction_keys:
+            preview = _team_member_debug_preview(teams.get(fk) or {})
+            debug_lines.append(f"  - {fk}: {preview or 'aucun joueur détecté'}")
+        debug_dump = "\n".join(debug_lines)
+        raise RuntimeError(
+            "Impossible d'identifier l'équipe du joueur dans le roster du match.\n"
+            f"  nickname input    : {nickname}\n"
+            f"  nickname résolu   : {resolved_nickname or '--'}\n"
+            f"  player_id         : {player_id}\n"
+            f"  match_id          : {match_id}\n"
+            "  Aperçu rosters:\n"
+            f"{debug_dump}"
+        )
 
-    our_faction   = our_faction or faction_keys[0]
-    enemy_faction = [k for k in faction_keys if k != our_faction][0]
+    enemy_candidates = [k for k in faction_keys if k != our_faction]
+    if not enemy_candidates:
+        raise RuntimeError(
+            f"Impossible de déterminer l'équipe adverse pour match_id={match_id} (our_faction={our_faction})."
+        )
+    enemy_faction = enemy_candidates[0]
 
     map_name = "inconnue"
     voting = match.get("voting") or {}
@@ -776,9 +866,6 @@ async def run_stats_analysis(
 
 
 # ─── DISPLAY ──────────────────────────────────────────────────────────────────
-
-def print_separator(char: str = "═", width: int = 80):
-    print(char * width)
 
 def print_team_table(team_name: str, players_metrics: List[dict], is_ours: bool) -> float:
     color = Fore.CYAN if is_ours else Fore.MAGENTA
@@ -1006,8 +1093,10 @@ async def main():
                 )
 
                 # Calculs de probabilité
-                # p_round_win = base_prob (reflète notre avantage relatif par round)
-                score_prob   = compute_score_probability(our_r, enemy_r, base_prob)
+                # On atténue l'extrême de base_prob pour éviter des live probs
+                # trop optimistes/pessimistes malgré un score réel défavorable.
+                round_win_p = 0.5 + (clamp(base_prob) - 0.5) * ROUND_WIN_BASE_INFLUENCE
+                score_prob   = compute_score_probability(our_r, enemy_r, round_win_p)
                 dynamic_prob = blend_probabilities(base_prob, score_prob, our_r, enemy_r)
 
                 # Affiche uniquement si le score a changé (ou 1er poll)
