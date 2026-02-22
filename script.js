@@ -57,6 +57,20 @@ const FACEIT_KR_KEYS = [
   "K/R"
 ];
 
+const FACEIT_TOTAL_KILLS_KEYS = [
+  "Total Kills with extended stats",
+  "Kills with extended stats",
+  "Total Kills",
+  "Kills"
+];
+
+const FACEIT_TOTAL_ROUNDS_KEYS = [
+  "Total Rounds with extended stats",
+  "Rounds with extended stats",
+  "Total Rounds",
+  "Rounds"
+];
+
 const DEFAULT_AVATAR =
   "data:image/svg+xml;charset=utf-8," +
   encodeURIComponent(
@@ -100,7 +114,8 @@ const RUNTIME = {
   resolvedPlayerId: "",
   resolvedSteamId64: "",
   resolvedMatchId: "",
-  bootstrapAt: 0
+  bootstrapAt: 0,
+  lastLiveWinprobPct: Number.NaN
 };
 
 let refreshTimer = null;
@@ -304,6 +319,8 @@ async function fetchFaceit() {
   ]);
 
   const lifetime = isPlainObject(statsPayload?.lifetime) ? statsPayload.lifetime : {};
+  const computedKr = computeKrFromLifetime(lifetime, { decimals: 2 });
+  const fallbackKr = getLifetimeMetric(lifetime, FACEIT_KR_KEYS, { decimals: 2 });
 
   return {
     playerId,
@@ -318,7 +335,8 @@ async function fetchFaceit() {
       percent: true
     }),
     kd: getLifetimeMetric(lifetime, FACEIT_KD_KEYS, { decimals: 2 }),
-    kr: getLifetimeMetric(lifetime, FACEIT_KR_KEYS, { decimals: 2 }),
+    // K/R fiable: calcul explicite sur stats agrégées FACEIT (Kills / Rounds).
+    kr: computedKr !== "--" ? computedKr : fallbackKr,
     matches: parseFaceitRecentMatches(historyPayload?.items, playerId)
   };
 }
@@ -679,26 +697,10 @@ function renderWinProbability(payload) {
   const clamped = Math.max(0, Math.min(1, probability));
   const pct = clamped * 100;
   const accent = getWinprobColor(pct);
-  const ourTeam = String(payload?.our_team_name || payload?.ourTeamName || "").trim();
-  const enemyTeam = String(payload?.enemy_team_name || payload?.enemyTeamName || "").trim();
-  const mapName = String(payload?.map_name || payload?.mapName || "").trim();
-  const matchId = String(payload?.match_id || payload?.matchId || "").trim();
 
   DOM.winprobBadge.style.setProperty("--winprob-accent", accent);
   DOM.winprobValue.textContent = `${pct.toFixed(1).replace(".", ",")}%`;
-
-  const metaParts = [];
-  if (mapName) {
-    metaParts.push(mapName.toUpperCase());
-  }
-  if (ourTeam && enemyTeam) {
-    metaParts.push(`${ourTeam} vs ${enemyTeam}`);
-  }
-  if (!mapName && !ourTeam && !enemyTeam && matchId) {
-    metaParts.push(`Match ${matchId.slice(0, 12)}...`);
-  }
-
-  DOM.winprobMeta.textContent = metaParts.join(" • ") || "Probabilité calculée";
+  DOM.winprobMeta.textContent = "";
 }
 
 function renderLiveWinProbability(payload) {
@@ -710,6 +712,8 @@ function renderLiveWinProbability(payload) {
     DOM.liveWinprobBadge.style.setProperty("--winprob-accent", "#888888");
     DOM.liveWinprobValue.textContent = "--%";
     DOM.liveWinprobMeta.textContent = "Aucune partie en cours";
+    clearLiveWinprobDelta();
+    RUNTIME.lastLiveWinprobPct = Number.NaN;
     return;
   }
 
@@ -728,32 +732,58 @@ function renderLiveWinProbability(payload) {
     DOM.liveWinprobBadge.style.setProperty("--winprob-accent", "#888888");
     DOM.liveWinprobValue.textContent = "--%";
     DOM.liveWinprobMeta.textContent = "Live indisponible";
+    clearLiveWinprobDelta();
+    RUNTIME.lastLiveWinprobPct = Number.NaN;
     return;
   }
 
   const clamped = Math.max(0, Math.min(1, probability));
   const pct = clamped * 100;
   const accent = getWinprobColor(pct);
-  const scoreOur = asFiniteNumber(payload?.score_our ?? payload?.scoreOur);
-  const scoreEnemy = asFiniteNumber(payload?.score_enemy ?? payload?.scoreEnemy);
-  const ourTeam = String(payload?.our_team || payload?.ourTeam || "").trim();
-  const enemyTeam = String(payload?.enemy_team || payload?.enemyTeam || "").trim();
-  const scoreSource = String(payload?.score_source || payload?.scoreSource || "").trim();
+  const previousPct = asFiniteNumber(RUNTIME.lastLiveWinprobPct);
+  const hasPrevious = Number.isFinite(previousPct);
+  const deltaPct = hasPrevious ? pct - previousPct : Number.NaN;
 
   DOM.liveWinprobBadge.style.setProperty("--winprob-accent", accent);
   DOM.liveWinprobValue.textContent = `${pct.toFixed(1).replace(".", ",")}%`;
+  applyLiveWinprobDelta(deltaPct, hasPrevious);
+  DOM.liveWinprobMeta.textContent = "";
 
-  const metaParts = [];
-  if (Number.isFinite(scoreOur) && Number.isFinite(scoreEnemy)) {
-    const leftTeam = ourTeam || "Nous";
-    const rightTeam = enemyTeam || "Adversaire";
-    metaParts.push(`${leftTeam} ${Math.round(scoreOur)}-${Math.round(scoreEnemy)} ${rightTeam}`);
-  }
-  if (scoreSource) {
-    metaParts.push(`source: ${scoreSource}`);
+  RUNTIME.lastLiveWinprobPct = pct;
+}
+
+function clearLiveWinprobDelta() {
+  if (!DOM.liveWinprobValue) {
+    return;
   }
 
-  DOM.liveWinprobMeta.textContent = metaParts.join(" • ") || "Live update";
+  DOM.liveWinprobValue.classList.remove("has-delta");
+  DOM.liveWinprobValue.removeAttribute("data-delta");
+  DOM.liveWinprobValue.removeAttribute("data-delta-dir");
+}
+
+function applyLiveWinprobDelta(deltaPct, hasPrevious) {
+  if (!DOM.liveWinprobValue || !hasPrevious || !Number.isFinite(deltaPct)) {
+    clearLiveWinprobDelta();
+    return;
+  }
+
+  const absValue = Math.abs(deltaPct);
+  const formatted = absValue.toFixed(1).replace(".", ",");
+  let direction = "flat";
+  let indicator = `•${formatted}`;
+
+  if (deltaPct > 0.05) {
+    direction = "up";
+    indicator = `▲${formatted}`;
+  } else if (deltaPct < -0.05) {
+    direction = "down";
+    indicator = `▼${formatted}`;
+  }
+
+  DOM.liveWinprobValue.dataset.delta = indicator;
+  DOM.liveWinprobValue.dataset.deltaDir = direction;
+  DOM.liveWinprobValue.classList.add("has-delta");
 }
 
 async function refreshLiveWinProbability(options = {}) {
@@ -1034,6 +1064,18 @@ function getLifetimeMetric(lifetime, candidateKeys, options = {}) {
   return formatMetric(rawValue, options);
 }
 
+function computeKrFromLifetime(lifetime, options = {}) {
+  const kills = pickLifetimeNumber(lifetime, FACEIT_TOTAL_KILLS_KEYS);
+  const rounds = pickLifetimeNumber(lifetime, FACEIT_TOTAL_ROUNDS_KEYS);
+
+  if (!Number.isFinite(kills) || !Number.isFinite(rounds) || rounds <= 0) {
+    return "--";
+  }
+
+  const decimals = Number.isInteger(options.decimals) ? options.decimals : 2;
+  return finalizeMetricNumber(kills / rounds, decimals, false);
+}
+
 function pickLifetimeValue(lifetime, candidateKeys) {
   const lookup = new Map();
 
@@ -1051,6 +1093,14 @@ function pickLifetimeValue(lifetime, candidateKeys) {
   return null;
 }
 
+function pickLifetimeNumber(lifetime, candidateKeys) {
+  const rawValue = pickLifetimeValue(lifetime, candidateKeys);
+  if (rawValue === null) {
+    return Number.NaN;
+  }
+  return parseMetricNumber(rawValue);
+}
+
 function formatMetric(value, options = {}) {
   const decimals = Number.isInteger(options.decimals) ? options.decimals : 0;
   const asPercent = Boolean(options.percent);
@@ -1064,7 +1114,7 @@ function formatMetric(value, options = {}) {
     return "--";
   }
 
-  const numeric = Number(raw.replace(/%/g, "").replace(/,/g, "."));
+  const numeric = parseMetricNumber(raw);
   if (Number.isFinite(numeric)) {
     return finalizeMetricNumber(numeric, decimals, asPercent);
   }
@@ -1074,6 +1124,45 @@ function formatMetric(value, options = {}) {
   }
 
   return raw;
+}
+
+function parseMetricNumber(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : Number.NaN;
+  }
+
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return Number.NaN;
+  }
+
+  let cleaned = raw.replace(/%/g, "").replace(/\s+/g, "");
+  if (!cleaned) {
+    return Number.NaN;
+  }
+
+  const hasComma = cleaned.includes(",");
+  const hasDot = cleaned.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = cleaned.lastIndexOf(",");
+    const lastDot = cleaned.lastIndexOf(".");
+    const decimalSep = lastComma > lastDot ? "," : ".";
+    const thousandsSepRegex = decimalSep === "," ? /\./g : /,/g;
+    cleaned = cleaned.replace(thousandsSepRegex, "");
+    cleaned = cleaned.replace(decimalSep, ".");
+  } else if (hasComma) {
+    const decimalDigits = cleaned.length - cleaned.lastIndexOf(",") - 1;
+    cleaned = decimalDigits === 3 ? cleaned.replace(/,/g, "") : cleaned.replace(",", ".");
+  } else if (hasDot) {
+    const decimalDigits = cleaned.length - cleaned.lastIndexOf(".") - 1;
+    if (decimalDigits === 3) {
+      cleaned = cleaned.replace(/\./g, "");
+    }
+  }
+
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
 function finalizeMetricNumber(numberValue, decimals, asPercent) {

@@ -445,6 +445,68 @@ def compute_win_probability(team_score: float, enemy_score: float) -> float:
     return clamp(prob, 0.05, 0.95)
 
 
+def compute_avg_elo_gap(our_metrics: list, enemy_metrics: list) -> dict:
+    our_elos = [float(m.get("elo", 0)) for m in our_metrics if isinstance(m, dict)]
+    enemy_elos = [float(m.get("elo", 0)) for m in enemy_metrics if isinstance(m, dict)]
+    if not our_elos or not enemy_elos:
+        return {
+            "avg_elo_our": None,
+            "avg_elo_enemy": None,
+            "avg_elo_gap": None,
+            "avg_elo_gap_abs": None,
+        }
+
+    avg_our = sum(our_elos) / len(our_elos)
+    avg_enemy = sum(enemy_elos) / len(enemy_elos)
+    gap = avg_our - avg_enemy
+    return {
+        "avg_elo_our": round(avg_our, 2),
+        "avg_elo_enemy": round(avg_enemy, 2),
+        "avg_elo_gap": round(gap, 2),
+        "avg_elo_gap_abs": round(abs(gap), 2),
+    }
+
+
+def compute_sample_quality(all_metrics: list) -> dict:
+    samples = []
+    for metric in all_metrics:
+        if not isinstance(metric, dict):
+            continue
+        matches_analyzed = metric.get("matches_analyzed")
+        if isinstance(matches_analyzed, (int, float)):
+            samples.append(float(matches_analyzed))
+
+    if not samples:
+        return {
+            "sample_avg_matches": None,
+            "sample_quality_ratio": None,
+            "sample_quality_pct": None,
+            "sample_quality_label": "inconnue",
+            "sample_target_matches": STATS_LIMIT,
+            "sample_player_count": 0,
+        }
+
+    avg_matches = sum(samples) / len(samples)
+    ratio = clamp(avg_matches / float(STATS_LIMIT), 0.0, 1.0)
+    pct = ratio * 100.0
+
+    if ratio >= 0.8:
+        label = "élevée"
+    elif ratio >= 0.5:
+        label = "moyenne"
+    else:
+        label = "faible"
+
+    return {
+        "sample_avg_matches": round(avg_matches, 2),
+        "sample_quality_ratio": round(ratio, 4),
+        "sample_quality_pct": round(pct, 1),
+        "sample_quality_label": label,
+        "sample_target_matches": STATS_LIMIT,
+        "sample_player_count": len(samples),
+    }
+
+
 # ─── DISPLAY ──────────────────────────────────────────────────────────────────
 
 def print_team_table(team_name: str, players_metrics: list, is_our_team: bool):
@@ -895,9 +957,23 @@ async def main():
         win_prob = compute_win_probability(our_score, enemy_score)
         print_result(our_team_name, win_prob, map_name)
 
+        elo_gap_info = compute_avg_elo_gap(our_metrics, enemy_metrics)
+        sample_quality_info = compute_sample_quality(all_metrics)
+
         # ── Score brut pour debug
         print(f"  Score brut  — Votre équipe : {Fore.CYAN}{our_score:.4f}{Style.RESET_ALL}  |  Adversaires : {Fore.MAGENTA}{enemy_score:.4f}{Style.RESET_ALL}")
         print(f"  Méthode     — Pondération : ELO×{WEIGHTS['elo']} | K/D×{WEIGHTS['kd']} | WR×{WEIGHTS['winrate']} | MapWR×{WEIGHTS['map_winrate']} | HS×{WEIGHTS['hs_pct']} | Kills×{WEIGHTS['avg_kills']}")
+        if elo_gap_info["avg_elo_gap"] is not None:
+            print(
+                f"  Écart ELO moyen (nous - eux) : "
+                f"{Fore.YELLOW}{elo_gap_info['avg_elo_gap']:+.0f}{Style.RESET_ALL}"
+            )
+        if sample_quality_info["sample_avg_matches"] is not None:
+            print(
+                f"  Qualité d'échantillon        : "
+                f"{Fore.YELLOW}{sample_quality_info['sample_quality_label']}{Style.RESET_ALL} "
+                f"({sample_quality_info['sample_avg_matches']:.1f}/{STATS_LIMIT} matchs/joueur)"
+            )
         print()
 
         emit_machine_payload(
@@ -913,6 +989,16 @@ async def main():
                 "win_probability": round(win_prob, 6),
                 "win_probability_pct": round(win_prob * 100, 2),
                 "forced_match_id": bool(forced_match_id),
+                "avg_elo_our": elo_gap_info["avg_elo_our"],
+                "avg_elo_enemy": elo_gap_info["avg_elo_enemy"],
+                "avg_elo_gap": elo_gap_info["avg_elo_gap"],
+                "avg_elo_gap_abs": elo_gap_info["avg_elo_gap_abs"],
+                "sample_avg_matches": sample_quality_info["sample_avg_matches"],
+                "sample_quality_ratio": sample_quality_info["sample_quality_ratio"],
+                "sample_quality_pct": sample_quality_info["sample_quality_pct"],
+                "sample_quality_label": sample_quality_info["sample_quality_label"],
+                "sample_target_matches": sample_quality_info["sample_target_matches"],
+                "sample_player_count": sample_quality_info["sample_player_count"],
             },
         )
 

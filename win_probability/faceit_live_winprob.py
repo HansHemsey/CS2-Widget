@@ -53,7 +53,7 @@ BASE_URL             = "https://open.faceit.com/data/v4"
 FACEIT_WEB_BASE      = "https://www.faceit.com"
 STATS_LIMIT          = 30        # matchs analysés par joueur (base_prob)
 ROUNDS_TO_WIN        = 13        # premier à 13 manches
-POLL_INTERVAL        = 60        # secondes entre chaque poll du score
+POLL_INTERVAL        = 115        # secondes entre chaque poll du score
 SCORE_BLEND_POWER    = 0.6       # vitesse à laquelle le score prend le dessus (0.5 = racine carrée)
 HISTORY_SCAN_LIMIT   = 30
 ACTIVE_LOOKBACK_SEC  = 24 * 3600
@@ -274,10 +274,10 @@ async def fetch_live_score(
     match_id: str,
     our_faction: str,
     enemy_faction: str,
-) -> Tuple[int, int, str]:
+) -> Tuple[int, int, str, str, str]:
     """
     Récupère le score en temps réel depuis plusieurs sources par ordre de fiabilité.
-    Retourne (our_score, enemy_score, source_name).
+    Retourne (our_score, enemy_score, source_name, our_side, enemy_side).
 
     Sources essayées :
       1. FACEIT Data API v4  /matches/{match_id}  → results.score
@@ -289,7 +289,10 @@ async def fetch_live_score(
     if match_data:
         score = _extract_score_from_data_api(match_data, our_faction, enemy_faction)
         if score is not None:
-            return score[0], score[1], "data_api_v4"
+            teams = match_data.get("teams") or {}
+            our_side = _extract_side_from_team_obj(teams.get(our_faction) or {})
+            enemy_side = _extract_side_from_team_obj(teams.get(enemy_faction) or {})
+            return score[0], score[1], "data_api_v4", our_side, enemy_side
 
     # ── Source 2 : Web API v2 ──────────────────────────────────────────────────
     try:
@@ -303,7 +306,12 @@ async def fetch_live_score(
             payload = resp.json().get("payload", {}) or {}
             score = _extract_score_from_web_v2(payload, our_faction, enemy_faction)
             if score is not None:
-                return score[0], score[1], "web_api_v2"
+                teams = payload.get("teams") or {}
+                our_team = teams.get(our_faction) or teams.get("faction1") or {}
+                enemy_team = teams.get(enemy_faction) or teams.get("faction2") or {}
+                our_side = _extract_side_from_team_obj(our_team)
+                enemy_side = _extract_side_from_team_obj(enemy_team)
+                return score[0], score[1], "web_api_v2", our_side, enemy_side
     except Exception:
         pass
 
@@ -319,11 +327,47 @@ async def fetch_live_score(
             payload = resp.json().get("payload", {}) or {}
             score = _extract_score_from_web_v1(payload, our_faction, enemy_faction)
             if score is not None:
-                return score[0], score[1], "web_api_v1"
+                teams = payload.get("teams") or {}
+                our_team = teams.get(our_faction) or teams.get("faction1") or {}
+                enemy_team = teams.get(enemy_faction) or teams.get("faction2") or {}
+                our_side = _extract_side_from_team_obj(our_team)
+                enemy_side = _extract_side_from_team_obj(enemy_team)
+                return score[0], score[1], "web_api_v1", our_side, enemy_side
     except Exception:
         pass
 
-    return 0, 0, "unavailable"
+    return 0, 0, "unavailable", "", ""
+
+
+def _normalize_side_label(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    if text in {"CT", "COUNTER_TERRORIST", "COUNTER-TERRORIST", "COUNTER TERRORIST", "COUNTERTERRORISTS"}:
+        return "CT"
+    if text in {"T", "TERRORIST", "TERRORISTS"}:
+        return "T"
+    return ""
+
+
+def _extract_side_from_team_obj(team_obj: dict) -> str:
+    if not isinstance(team_obj, dict):
+        return ""
+
+    stats = team_obj.get("stats") or {}
+    for key in ("side", "current_side", "currentSide", "team_side", "teamSide", "starting_side", "startingSide"):
+        candidate = team_obj.get(key)
+        normalized = _normalize_side_label(candidate)
+        if normalized:
+            return normalized
+
+        if isinstance(stats, dict):
+            candidate_stats = stats.get(key)
+            normalized_stats = _normalize_side_label(candidate_stats)
+            if normalized_stats:
+                return normalized_stats
+
+    return ""
 
 
 def _extract_score_from_data_api(
@@ -957,7 +1001,7 @@ async def main():
         try:
             while True:
                 poll_num += 1
-                our_r, enemy_r, source = await fetch_live_score(
+                our_r, enemy_r, source, our_side, enemy_side = await fetch_live_score(
                     client, match_id, our_faction, enemy_faction
                 )
 
@@ -990,6 +1034,8 @@ async def main():
                             "enemy_team": enemy_team,
                             "score_our": our_r,
                             "score_enemy": enemy_r,
+                            "our_side": our_side,
+                            "enemy_side": enemy_side,
                             "score_source": source,
                             "base_win_probability":    round(base_prob,    6),
                             "score_win_probability":   round(score_prob,   6),

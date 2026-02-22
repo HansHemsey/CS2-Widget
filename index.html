@@ -11,7 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&family=Rajdhani:wght@500;700&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="./style.css?v=20260222-2" />
+  <link rel="stylesheet" href="./style.css?v=20260222-12" />
 </head>
 <body>
   <main class="widget" aria-live="polite">
@@ -22,7 +22,7 @@
     <section id="faceit-section" class="widget-section" aria-busy="false">
       <div class="section-heading">
         <h2>Live Card</h2>
-        <span id="faceit-loader" class="section-loader" hidden>Chargement...</span>
+        <span id="faceit-loader" class="section-loader" hidden></span>
       </div>
       <p id="faceit-error" class="section-error" hidden></p>
 
@@ -62,7 +62,7 @@
                 <span class="premier-mini-value">N/A</span>
               </div>
               <span id="faceit-country" class="country-chip">--</span>
-              <span id="premier-loader" class="section-loader section-loader--inline" hidden>Chargement...</span>
+              <span id="premier-loader" class="section-loader section-loader--inline" hidden></span>
               <p id="premier-error" class="section-error section-error--inline" hidden></p>
             </div>
             <div id="faceit-last-matches" class="results-pills results-pills--inline"></div>
@@ -71,19 +71,16 @@
       </article>
 
       <section id="winprob-section" class="winprob-section" aria-busy="false" aria-label="Probabilité de victoire">
-        <div class="section-heading section-heading--compact">
-          <h3>Win Probability</h3>
-          <span id="winprob-loader" class="section-loader" hidden>Chargement...</span>
-        </div>
+        <span id="winprob-loader" class="section-loader" hidden></span>
         <p id="winprob-error" class="section-error section-error--inline-block" hidden></p>
         <div class="winprob-grid">
           <div id="winprob-badge" class="winprob-badge">
-            <span class="winprob-badge__label">AVANT-MATCH WIN PROBABILITY</span>
+            <span class="winprob-badge__label">PRE-MATCH WIN PROBABILITY</span>
             <span id="winprob-value" class="winprob-badge__value">--%</span>
             <span id="winprob-meta" class="winprob-badge__meta">Aucune partie en cours</span>
           </div>
           <div id="live-winprob-badge" class="winprob-badge winprob-badge--live">
-            <span class="winprob-badge__label">🔴 LIVE WIN PROBABILITY</span>
+            <span class="winprob-badge__label"><span class="live-dot" aria-hidden="true"></span>LIVE WIN PROBABILITY</span>
             <span id="live-winprob-value" class="winprob-badge__value">--%</span>
             <span id="live-winprob-meta" class="winprob-badge__meta">Aucune partie en cours</span>
           </div>
@@ -96,6 +93,6 @@
     </footer>
   </main>
 
-  <script src="./script.js?v=20260222-2" defer></script>
+  <script src="./script.js?v=20260222-12" defer></script>
 </body>
 </html>
