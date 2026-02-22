@@ -3,6 +3,7 @@
 const CONFIG = {
   STEAM_ID_64: "",
   FACEIT_NICKNAME: "",
+  FACEIT_CS2_ELO_LEADERBOARD_ID: "",
   REFRESH_INTERVAL_MS: 60000,
   PROXY_BASE_URL: "http://127.0.0.1:8787", // Le widget fonctionne en proxy-only pour ne jamais exposer les clés API.
   FETCH_TIMEOUT_MS: 12000,
@@ -90,6 +91,7 @@ const DOM = {
   faceitNickname: document.getElementById("faceit-nickname"),
   faceitCountry: document.getElementById("faceit-country"),
   faceitLevelBadge: document.getElementById("faceit-level-badge"),
+  faceitTopRank: document.getElementById("faceit-top-rank"),
   faceitElo: document.getElementById("faceit-elo"),
   faceitAvg: document.getElementById("faceit-avg"),
   faceitHs: document.getElementById("faceit-hs"),
@@ -114,6 +116,7 @@ const RUNTIME = {
   resolvedPlayerId: "",
   resolvedSteamId64: "",
   resolvedMatchId: "",
+  resolvedFaceitCs2EloLeaderboardId: "",
   bootstrapAt: 0,
   lastLiveWinprobPct: Number.NaN
 };
@@ -321,14 +324,22 @@ async function fetchFaceit() {
   const lifetime = isPlainObject(statsPayload?.lifetime) ? statsPayload.lifetime : {};
   const computedKr = computeKrFromLifetime(lifetime, { decimals: 2 });
   const fallbackKr = getLifetimeMetric(lifetime, FACEIT_KR_KEYS, { decimals: 2 });
+  const level = asFiniteNumber(profile?.games?.cs2?.skill_level);
+  const region = String(profile?.games?.cs2?.region || playerLookup?.games?.cs2?.region || "EU").trim().toUpperCase();
+
+  let topRank = null;
+  if (Number.isFinite(level) && Math.round(level) >= 10) {
+    topRank = await get_top_rank(playerId, { region });
+  }
 
   return {
     playerId,
     nickname: profile?.nickname || playerLookup?.nickname || CONFIG.FACEIT_NICKNAME,
     country: profile?.country || playerLookup?.country || "",
     avatar: profile?.avatar || playerLookup?.avatar || "",
-    level: asFiniteNumber(profile?.games?.cs2?.skill_level),
+    level,
     elo: asFiniteNumber(profile?.games?.cs2?.faceit_elo),
+    topRank: Number.isFinite(asFiniteNumber(topRank)) ? Math.round(asFiniteNumber(topRank)) : Number.NaN,
     avg: getLifetimeMetric(lifetime, FACEIT_AVG_KEYS, { decimals: 1 }),
     hs: getLifetimeMetric(lifetime, FACEIT_HS_KEYS, {
       decimals: 0,
@@ -339,6 +350,114 @@ async function fetchFaceit() {
     kr: computedKr !== "--" ? computedKr : fallbackKr,
     matches: parseFaceitRecentMatches(historyPayload?.items, playerId)
   };
+}
+
+async function get_top_rank(playerId, options = {}) {
+  const normalizedPlayerId = String(playerId || "").trim();
+  if (!normalizedPlayerId) {
+    return null;
+  }
+
+  const region = String(options.region || "EU").trim().toUpperCase() || "EU";
+  let leaderboardId = String(
+    options.leaderboardId || CONFIG.FACEIT_CS2_ELO_LEADERBOARD_ID || RUNTIME.resolvedFaceitCs2EloLeaderboardId || ""
+  ).trim();
+
+  if (!leaderboardId) {
+    leaderboardId = await resolveFaceitCs2EloLeaderboardId();
+  }
+
+  if (leaderboardId) {
+    try {
+      const leaderboardRank = await apiFetch(
+        "faceit",
+        `leaderboards/${encodeURIComponent(leaderboardId)}/players/${encodeURIComponent(normalizedPlayerId)}`
+      );
+      const position = extractRankPosition(leaderboardRank);
+      if (Number.isFinite(position) && position > 0) {
+        return Math.round(position);
+      }
+    } catch (error) {
+      if (!isHttp404Like(error)) {
+        // Tolérant: on continue avec le fallback rankings.
+      }
+    }
+  }
+
+  try {
+    const ranking = await apiFetch(
+      "faceit",
+      `rankings/games/cs2/regions/${encodeURIComponent(region)}/players/${encodeURIComponent(normalizedPlayerId)}`
+    );
+    const position = extractRankPosition(ranking);
+    if (Number.isFinite(position) && position > 0) {
+      return Math.round(position);
+    }
+  } catch (error) {
+    if (!isHttp404Like(error)) {
+      // Tolérant: absence ranking ou route indisponible => pas top.
+    }
+  }
+
+  return null;
+}
+
+async function resolveFaceitCs2EloLeaderboardId() {
+  const explicit = String(CONFIG.FACEIT_CS2_ELO_LEADERBOARD_ID || "").trim();
+  if (explicit) {
+    RUNTIME.resolvedFaceitCs2EloLeaderboardId = explicit;
+    return explicit;
+  }
+
+  if (RUNTIME.resolvedFaceitCs2EloLeaderboardId) {
+    return RUNTIME.resolvedFaceitCs2EloLeaderboardId;
+  }
+
+  try {
+    const payload = await apiFetch("faceit", "leaderboards", {
+      game: "cs2",
+      type: "elo",
+      offset: 0,
+      limit: 50
+    });
+
+    const items = Array.isArray(payload?.items)
+      ? payload.items
+      : Array.isArray(payload?.payload?.items)
+      ? payload.payload.items
+      : [];
+
+    if (!items.length) {
+      return "";
+    }
+
+    let best = "";
+    for (const item of items) {
+      const id = extractLeaderboardId(item);
+      if (!id) {
+        continue;
+      }
+      const text = `${item?.name || ""} ${item?.type || ""} ${item?.description || ""}`.toLowerCase();
+      if (text.includes("cs2") && text.includes("elo")) {
+        best = id;
+        break;
+      }
+      if (!best) {
+        best = id;
+      }
+    }
+
+    if (best) {
+      RUNTIME.resolvedFaceitCs2EloLeaderboardId = best;
+      return best;
+    }
+  } catch (error) {
+    if (!isHttp404Like(error)) {
+      // Endpoint optionnel selon versions de l'API.
+    }
+  }
+
+  return "";
 }
 
 async function fetchWinProbability() {
@@ -617,6 +736,7 @@ function renderFaceitProfile(data) {
     avatar: "",
     level: Number.NaN,
     elo: Number.NaN,
+    topRank: Number.NaN,
     avg: "--",
     hs: "--",
     kd: "--",
@@ -641,13 +761,32 @@ function renderFaceitProfile(data) {
   DOM.faceitCountry.textContent = countryText;
 
   const hasLevel = Number.isFinite(profile.level) && profile.level >= 1 && profile.level <= 10;
-  if (hasLevel) {
+  const topRank = asFiniteNumber(profile.topRank);
+  const isChallenger = hasLevel && Math.round(profile.level) >= 10 && Number.isFinite(topRank) && topRank > 0 && topRank <= 1000;
+
+  if (isChallenger) {
+    DOM.faceitLevelBadge.src = "./images/faceit_elo/challenger.png";
+    DOM.faceitLevelBadge.hidden = false;
+    DOM.faceitLevelBadge.alt = `Faceit Challenger #${Math.round(topRank)}`;
+    if (DOM.faceitTopRank) {
+      DOM.faceitTopRank.textContent = `#${Math.round(topRank).toLocaleString("fr-FR")}`;
+      DOM.faceitTopRank.hidden = false;
+    }
+  } else if (hasLevel) {
     DOM.faceitLevelBadge.src = `./images/faceit_elo/${Math.round(profile.level)}.png`;
     DOM.faceitLevelBadge.hidden = false;
     DOM.faceitLevelBadge.alt = `Niveau Faceit ${Math.round(profile.level)}`;
+    if (DOM.faceitTopRank) {
+      DOM.faceitTopRank.hidden = true;
+      DOM.faceitTopRank.textContent = "";
+    }
   } else {
     DOM.faceitLevelBadge.hidden = true;
     DOM.faceitLevelBadge.removeAttribute("src");
+    if (DOM.faceitTopRank) {
+      DOM.faceitTopRank.hidden = true;
+      DOM.faceitTopRank.textContent = "";
+    }
   }
 
   const eloText = Number.isFinite(profile.elo)
@@ -1099,6 +1238,51 @@ function pickLifetimeNumber(lifetime, candidateKeys) {
     return Number.NaN;
   }
   return parseMetricNumber(rawValue);
+}
+
+function extractLeaderboardId(item) {
+  if (!isPlainObject(item)) {
+    return "";
+  }
+  return String(item.leaderboard_id || item.leaderboardId || item.id || "").trim();
+}
+
+function extractRankPosition(payload) {
+  const candidates = [
+    payload?.position,
+    payload?.rank,
+    payload?.place,
+    payload?.placement,
+    payload?.player?.position,
+    payload?.player?.rank,
+    payload?.payload?.position,
+    payload?.payload?.rank,
+    payload?.items?.[0]?.position,
+    payload?.items?.[0]?.rank
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null) {
+      continue;
+    }
+    const numeric = parseMetricNumber(String(candidate).replace(/^#/, ""));
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+    }
+  }
+
+  return Number.NaN;
+}
+
+function isHttp404Like(error) {
+  const message =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+      ? error.message
+      : String(error || "");
+
+  return /(^|[^0-9])404([^0-9]|$)/.test(message) || /not found/i.test(message);
 }
 
 function formatMetric(value, options = {}) {

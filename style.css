@@ -180,6 +180,24 @@ body {
   box-shadow: 0 0 16px rgba(255, 40, 40, 0.52);
 }
 
+.faceit-top-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 216, 106, 0.58);
+  background: linear-gradient(180deg, rgba(255, 226, 139, 0.18) 0%, rgba(45, 35, 12, 0.62) 100%);
+  color: #ffd56b;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  text-shadow: 0 0 8px rgba(255, 213, 107, 0.36);
+}
+
 .faceit-hud__stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -533,6 +551,13 @@ body {
     height: 40px !important;
     min-width: 40px;
     flex: 0 0 40px;
+  }
+
+  .faceit-top-rank {
+    min-width: 34px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 0.62rem;
   }
 
   .premier-mini-value {
