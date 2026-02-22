@@ -11,7 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&family=Rajdhani:wght@500;700&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="./style.css?v=20260222-2" />
 </head>
 <body>
   <main class="widget" aria-live="polite">
@@ -58,15 +58,9 @@
 
           <div class="faceit-hud__bottom">
             <div class="faceit-hud__identity">
-              <div id="premier-mini-badge" class="premier-mini-badge" hidden>
-                <img
-                  src="./assets/premier-logo.svg"
-                  class="premier-mini-badge__logo"
-                  alt="Badge Premier non classé"
-                />
-                <span id="premier-mini-badge-value" class="premier-mini-badge__value">UNRANKED</span>
+              <div id="premier-mini-slot" class="premier-mini-slot" aria-live="polite">
+                <span class="premier-mini-value">N/A</span>
               </div>
-              <span id="premier-mini-value" class="premier-mini-value">N/A</span>
               <span id="faceit-country" class="country-chip">--</span>
               <span id="premier-loader" class="section-loader section-loader--inline" hidden>Chargement...</span>
               <p id="premier-error" class="section-error section-error--inline" hidden></p>
@@ -82,10 +76,17 @@
           <span id="winprob-loader" class="section-loader" hidden>Chargement...</span>
         </div>
         <p id="winprob-error" class="section-error section-error--inline-block" hidden></p>
-        <div id="winprob-badge" class="winprob-badge">
-          <span class="winprob-badge__label">GAME WIN PROBABILITY</span>
-          <span id="winprob-value" class="winprob-badge__value">--%</span>
-          <span id="winprob-meta" class="winprob-badge__meta">Aucune donnée active</span>
+        <div class="winprob-grid">
+          <div id="winprob-badge" class="winprob-badge">
+            <span class="winprob-badge__label">AVANT-MATCH WIN PROBABILITY</span>
+            <span id="winprob-value" class="winprob-badge__value">--%</span>
+            <span id="winprob-meta" class="winprob-badge__meta">Aucune partie en cours</span>
+          </div>
+          <div id="live-winprob-badge" class="winprob-badge winprob-badge--live">
+            <span class="winprob-badge__label">🔴 LIVE WIN PROBABILITY</span>
+            <span id="live-winprob-value" class="winprob-badge__value">--%</span>
+            <span id="live-winprob-meta" class="winprob-badge__meta">Aucune partie en cours</span>
+          </div>
         </div>
       </section>
     </section>
@@ -95,6 +96,6 @@
     </footer>
   </main>
 
-  <script src="./script.js" defer></script>
+  <script src="./script.js?v=20260222-2" defer></script>
 </body>
 </html>

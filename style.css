@@ -157,11 +157,11 @@ body {
 .faceit-hud__rank {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 
 .faceit-elo {
-  font-size: 3rem;
+  font-size: 2rem;
   line-height: 0.84;
   font-weight: 800;
   color: #f4f4f4;
@@ -169,10 +169,14 @@ body {
 }
 
 .faceit-level-badge {
-  width: 25px;
-  height: 25px;
+  width: 35px !important;
+  height: 35px !important;
+  min-width: 35px;
+  flex: 0 0 35px;
+  display: block;
+  object-fit: contain;
   border-radius: 999px;
-  box-shadow: 0 0 12px rgba(255, 40, 40, 0.45);
+  box-shadow: 0 0 16px rgba(255, 40, 40, 0.52);
 }
 
 .faceit-hud__stats {
@@ -216,6 +220,12 @@ body {
   min-width: 0;
 }
 
+.premier-mini-slot {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+}
+
 .premier-mini-badge {
   position: relative;
   width: 108px;
@@ -224,26 +234,13 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  filter: drop-shadow(0 0 7px rgba(170, 170, 170, 0.35));
+  filter: drop-shadow(0 0 8px var(--premier-glow, rgba(170, 170, 170, 0.35)));
 }
 
-.premier-mini-badge__logo {
+.premier-mini-badge .premier-badge-svg {
   width: 100%;
   height: 100%;
   display: block;
-}
-
-.premier-mini-badge__value {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-family: "Stratum2Bold", "Rajdhani", sans-serif;
-  font-size: 0.82rem;
-  letter-spacing: 0.05em;
-  color: #d8d8d8;
-  text-shadow: 0 0 8px rgba(214, 214, 214, 0.55);
-  white-space: nowrap;
 }
 
 .premier-mini-value {
@@ -334,6 +331,12 @@ body {
   margin: 0 0 4px;
 }
 
+.winprob-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .winprob-badge {
   --winprob-accent: #f4c430;
   border-radius: 8px;
@@ -354,12 +357,17 @@ body {
   grid-template-areas:
     "label value"
     "meta value";
-  gap: 2px 8px;
+  gap: 3px 8px;
+  min-height: 66px;
+}
+
+.winprob-badge--live {
+  --winprob-accent: #5da3ff;
 }
 
 .winprob-badge__label {
   grid-area: label;
-  font-size: 0.62rem;
+  font-size: 0.58rem;
   letter-spacing: 0.09em;
   color: #c7c7c7;
   text-transform: uppercase;
@@ -367,7 +375,7 @@ body {
 
 .winprob-badge__value {
   grid-area: value;
-  font-size: 1.28rem;
+  font-size: 1.18rem;
   line-height: 1;
   font-weight: 800;
   color: color-mix(in srgb, var(--winprob-accent) 82%, #fff);
@@ -376,7 +384,7 @@ body {
 
 .winprob-badge__meta {
   grid-area: meta;
-  font-size: 0.67rem;
+  font-size: 0.63rem;
   color: #b2b2b2;
   white-space: nowrap;
   overflow: hidden;
@@ -415,8 +423,19 @@ body {
     font-size: 2rem;
   }
 
+  .faceit-level-badge {
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px;
+    flex: 0 0 40px;
+  }
+
   .premier-mini-value {
     font-size: 1.18rem;
+  }
+
+  .premier-mini-slot {
+    min-height: 34px;
   }
 
   .premier-mini-badge {
@@ -424,12 +443,28 @@ body {
     height: 34px;
   }
 
-  .premier-mini-badge__value {
-    font-size: 0.74rem;
-    right: 8px;
-  }
-
   .hud-stat__value {
     font-size: 0.88rem;
+  }
+
+  .winprob-grid {
+    gap: 6px;
+  }
+
+  .winprob-badge {
+    min-height: 60px;
+    padding: 5px 7px;
+  }
+
+  .winprob-badge__label {
+    font-size: 0.54rem;
+  }
+
+  .winprob-badge__value {
+    font-size: 1.05rem;
+  }
+
+  .winprob-badge__meta {
+    font-size: 0.6rem;
   }
 }

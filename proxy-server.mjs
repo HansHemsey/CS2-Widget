@@ -14,16 +14,19 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || "*";
 const WINPROB_TIMEOUT_MS = Number(process.env.WINPROB_TIMEOUT_MS || 90000);
+const LIVE_WINPROB_TIMEOUT_MS = Number(process.env.LIVE_WINPROB_TIMEOUT_MS || 90000);
 const MATCH_RESOLVE_TIMEOUT_MS = Number(process.env.MATCH_RESOLVE_TIMEOUT_MS || 25000);
 const FACEIT_API_KEY = String(process.env.FACEIT_API_KEY || "").trim();
 const LEETIFY_API_KEY = String(process.env.LEETIFY_API_KEY || "").trim();
 
 const WINPROB_DIR = path.join(__dirname, "win_probability");
 const WINPROB_SCRIPT = process.env.WINPROB_SCRIPT || "faceit_winprob.py";
+const LIVE_WINPROB_SCRIPT = process.env.LIVE_WINPROB_SCRIPT || "faceit_live_winprob.py";
 const MATCH_RESOLVE_SCRIPT = process.env.MATCH_RESOLVE_SCRIPT || "resolve_live_match.py";
 const DEFAULT_VENV_PYTHON = path.join(__dirname, ".venv", "bin", "python");
 const PYTHON_BIN = process.env.PYTHON_BIN || (existsSync(DEFAULT_VENV_PYTHON) ? DEFAULT_VENV_PYTHON : "python3");
 const WINPROB_MARKER = "__WINPROB_JSON__";
+const LIVE_WINPROB_MARKER = "__LIVEWINPROB_JSON__";
 const MATCH_RESOLVE_MARKER = "__MATCHID_JSON__";
 
 const SERVICE_BASE = {
@@ -131,6 +134,54 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (requestUrl.pathname === "/live-win-probability") {
+    if (req.method !== "GET") {
+      respondJson(res, 405, { error: "Méthode non autorisée. Utilisez GET." });
+      return;
+    }
+
+    const nickname = String(requestUrl.searchParams.get("nickname") || "").trim();
+    const requestedMatchId = String(
+      requestUrl.searchParams.get("match_id") || requestUrl.searchParams.get("matchId") || ""
+    ).trim();
+
+    if (!nickname) {
+      respondJson(res, 400, { ok: false, error: "Paramètre 'nickname' requis." });
+      return;
+    }
+
+    try {
+      let resolvedMatch = null;
+      let effectiveMatchId = requestedMatchId;
+
+      if (!effectiveMatchId) {
+        resolvedMatch = await resolveActiveMatchId({ nickname });
+        const candidate = String(resolvedMatch?.match_id || "").trim();
+        if (candidate) {
+          effectiveMatchId = candidate;
+        }
+      }
+
+      const payload = await runLiveWinProbability({ nickname, matchId: effectiveMatchId });
+      if (resolvedMatch) {
+        payload.auto_match_resolve = {
+          ok: Boolean(resolvedMatch.ok),
+          match_id: resolvedMatch.match_id || null,
+          state: resolvedMatch.state || null,
+        };
+      }
+      respondJson(res, 200, payload);
+    } catch (error) {
+      const statusCode = Number(error?.statusCode) || 502;
+      respondJson(res, statusCode, {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        detail: error?.detail || undefined
+      });
+    }
+    return;
+  }
+
   if (requestUrl.pathname !== "/proxy") {
     respondJson(res, 404, { error: "Route inconnue. Utilisez /proxy." });
     return;
@@ -193,7 +244,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`Proxy actif sur http://${HOST}:${PORT}`);
   console.log(
-    "Routes: GET /health, GET /resolve-live-match?nickname=..., GET /proxy?service=faceit|leetify&path=/..., GET /win-probability?nickname=..."
+    "Routes: GET /health, GET /resolve-live-match?nickname=..., GET /proxy?service=faceit|leetify&path=/..., GET /win-probability?nickname=..., GET /live-win-probability?nickname=..."
   );
 });
 
@@ -350,6 +401,54 @@ async function runWinProbability({ nickname, matchId }) {
   }
 
   const err = new Error("Réponse JSON win probability introuvable dans stdout.");
+  err.statusCode = 502;
+  err.detail = stdout;
+  throw err;
+}
+
+async function runLiveWinProbability({ nickname, matchId }) {
+  if (!existsSync(WINPROB_DIR)) {
+    const err = new Error(`Dossier introuvable: ${WINPROB_DIR}`);
+    err.statusCode = 500;
+    throw err;
+  }
+
+  const args = [LIVE_WINPROB_SCRIPT, nickname, "--json", "--once"];
+  if (matchId) {
+    args.push("--match-id", matchId);
+  }
+
+  const { code, stdout, stderr, timedOut } = await spawnProcess(PYTHON_BIN, args, {
+    cwd: WINPROB_DIR,
+    timeoutMs: LIVE_WINPROB_TIMEOUT_MS
+  });
+
+  if (timedOut) {
+    const err = new Error(`Timeout live win probability (${LIVE_WINPROB_TIMEOUT_MS} ms).`);
+    err.statusCode = 504;
+    err.detail = stderr || stdout;
+    throw err;
+  }
+
+  const payload = parseMarkedPayload(stdout, LIVE_WINPROB_MARKER);
+  if (payload) {
+    if (payload.ok === false) {
+      const err = new Error(payload.error || "Calcul live win probability en erreur.");
+      err.statusCode = 400;
+      err.detail = payload;
+      throw err;
+    }
+    return payload;
+  }
+
+  if (code !== 0) {
+    const err = new Error(`Le script live win probability a échoué (exit=${code}).`);
+    err.statusCode = 502;
+    err.detail = stderr || stdout;
+    throw err;
+  }
+
+  const err = new Error("Réponse JSON live win probability introuvable dans stdout.");
   err.statusCode = 502;
   err.detail = stdout;
   throw err;

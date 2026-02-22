@@ -7,8 +7,11 @@ const CONFIG = {
   PROXY_BASE_URL: "http://127.0.0.1:8787", // Le widget fonctionne en proxy-only pour ne jamais exposer les clés API.
   FETCH_TIMEOUT_MS: 12000,
   WINPROB_ENABLED: true,
+  LIVE_WINPROB_ENABLED: true,
   WINPROB_MATCH_ID: "",
   WINPROB_FETCH_TIMEOUT_MS: 45000,
+  LIVE_WINPROB_FETCH_TIMEOUT_MS: 45000,
+  LIVE_WINPROB_INTERVAL_MS: 20000,
   AUTO_RESOLVE_IDS: true
 };
 
@@ -63,10 +66,7 @@ const DEFAULT_AVATAR =
 const DOM = {
   premierLoader: document.getElementById("premier-loader"),
   premierError: document.getElementById("premier-error"),
-  premierBadgeContainer: document.getElementById("premier-badge-container"),
-  premierMiniBadge: document.getElementById("premier-mini-badge"),
-  premierMiniBadgeValue: document.getElementById("premier-mini-badge-value"),
-  premierMiniValue: document.getElementById("premier-mini-value"),
+  premierMiniSlot: document.getElementById("premier-mini-slot"),
 
   faceitSection: document.getElementById("faceit-section"),
   faceitPanel: document.getElementById("faceit-panel"),
@@ -89,6 +89,9 @@ const DOM = {
   winprobBadge: document.getElementById("winprob-badge"),
   winprobValue: document.getElementById("winprob-value"),
   winprobMeta: document.getElementById("winprob-meta"),
+  liveWinprobBadge: document.getElementById("live-winprob-badge"),
+  liveWinprobValue: document.getElementById("live-winprob-value"),
+  liveWinprobMeta: document.getElementById("live-winprob-meta"),
 
   lastUpdated: document.getElementById("last-updated")
 };
@@ -101,7 +104,9 @@ const RUNTIME = {
 };
 
 let refreshTimer = null;
+let liveWinprobTimer = null;
 let isRefreshing = false;
+let isLiveWinprobRefreshing = false;
 let premierSvgCounter = 0;
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -110,12 +115,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
 window.addEventListener("beforeunload", () => {
   stopAutoRefresh();
+  stopLiveWinprobRefresh();
 });
 
 async function initWidget() {
   renderBadgePremier(Number.NaN);
   renderFaceitProfile(null);
   renderWinProbability(null);
+  renderLiveWinProbability(null);
 
   if (!shouldShowWinprob() && DOM.winprobSection) {
     DOM.winprobSection.hidden = true;
@@ -127,6 +134,7 @@ async function initWidget() {
     await loadAllData();
   } finally {
     startAutoRefresh();
+    startLiveWinprobRefresh();
   }
 }
 
@@ -159,7 +167,12 @@ async function loadAllData() {
     if (leetifyResult.status === "fulfilled") {
       const premierElo = leetifyResult.value.premierElo;
       const isUnranked = Boolean(leetifyResult.value.isUnranked);
-      renderBadgePremier(premierElo, { unranked: isUnranked });
+      try {
+        renderBadgePremier(premierElo, { unranked: isUnranked });
+      } catch (error) {
+        renderBadgePremierFallback(isUnranked ? "UNRANKED" : "N/A");
+        setSectionError("premier", `Rendu badge Premier impossible (${toFriendlyError(error)}).`);
+      }
 
       if (!Number.isFinite(premierElo) && !isUnranked) {
         setSectionError("premier", "ELO Premier indisponible (profil privé, non classé, ou non lié).");
@@ -179,8 +192,14 @@ async function loadAllData() {
     if (showWinprob) {
       if (winprobResult.status === "fulfilled") {
         renderWinProbability(winprobResult.value);
+        if (winprobResult.value?.no_active_match === true) {
+          renderLiveWinProbability({ no_active_match: true });
+        } else {
+          void refreshLiveWinProbability({ withLoader: false, clearError: false });
+        }
       } else {
         renderWinProbability(null);
+        renderLiveWinProbability(null);
         setSectionError("winprob", toFriendlyError(winprobResult.reason));
       }
     }
@@ -198,9 +217,9 @@ async function loadAllData() {
 }
 
 async function fetchLeetify() {
-  const steamId64 = getEffectiveSteamId64();
+  const steamId64 = await resolveSteamId64ForLeetify();
   if (!steamId64) {
-    throw new Error("STEAM_ID_64 manquant (auto-résolution Faceit échouée).");
+    throw new Error("STEAM_ID_64 manquant après résolution via Faceit.");
   }
 
   let profile;
@@ -220,13 +239,38 @@ async function fetchLeetify() {
     throw error;
   }
 
-  const premier = extractPremierElo(profile);
+  // Source stricte demandée: ProfileResponse.ranks.premier
+  const profileData = isPlainObject(profile?.data) ? profile.data : profile;
+  const premierElo = asFiniteNumber(profileData?.ranks?.premier);
+  const isUnranked = !Number.isFinite(premierElo);
 
   return {
-    premierElo: premier.value,
-    premierSource: premier.source,
-    isUnranked: false
+    premierElo,
+    premierSource: "ranks.premier",
+    isUnranked
   };
+}
+
+async function resolveSteamId64ForLeetify() {
+  const current = getEffectiveSteamId64();
+  if (current) {
+    return current;
+  }
+
+  const nickname = String(CONFIG.FACEIT_NICKNAME || "").trim();
+  if (!nickname) {
+    return "";
+  }
+
+  // Résolution explicite via Faceit players pour garantir le flux:
+  // nickname -> player profile -> steam_id_64 -> Leetify profile.
+  const playerLookup = await apiFetch("faceit", "players", {
+    nickname,
+    game: "cs2"
+  });
+  syncRuntimeFromFaceitLookup(playerLookup);
+
+  return getEffectiveSteamId64();
 }
 
 async function fetchFaceit() {
@@ -297,18 +341,96 @@ async function fetchWinProbability() {
     url.searchParams.set("match_id", matchId);
   }
 
-  const payload = await fetchJson(
-    url,
-    { Accept: "application/json" },
-    asFiniteNumber(CONFIG.WINPROB_FETCH_TIMEOUT_MS)
-  );
+  let payload;
+  try {
+    payload = await fetchJson(
+      url,
+      { Accept: "application/json" },
+      asFiniteNumber(CONFIG.WINPROB_FETCH_TIMEOUT_MS)
+    );
+  } catch (error) {
+    if (isNoActiveMatchError(error)) {
+      return {
+        ok: true,
+        no_active_match: true,
+        win_probability: null
+      };
+    }
+    throw error;
+  }
 
   if (!isPlainObject(payload)) {
     throw new Error("Réponse win probability invalide.");
   }
 
   if (payload.ok === false) {
+    if (isNoActiveMatchPayload(payload)) {
+      return {
+        ...payload,
+        no_active_match: true,
+        win_probability: null
+      };
+    }
     throw new Error(String(payload.error || "Calcul win probability impossible."));
+  }
+
+  const returnedMatchId = String(payload.match_id || payload.matchId || "").trim();
+  if (!String(CONFIG.WINPROB_MATCH_ID || "").trim() && returnedMatchId) {
+    RUNTIME.resolvedMatchId = returnedMatchId;
+  }
+
+  return payload;
+}
+
+async function fetchLiveWinProbability() {
+  const nickname = String(CONFIG.FACEIT_NICKNAME || "").trim();
+  if (!nickname) {
+    throw new Error("FACEIT_NICKNAME manquant pour la live win probability.");
+  }
+
+  const proxyBase = String(CONFIG.PROXY_BASE_URL || "").trim();
+  if (!proxyBase) {
+    throw new Error("PROXY_BASE_URL requis pour récupérer la live win probability locale.");
+  }
+
+  const url = new URL("live-win-probability", ensureTrailingSlash(proxyBase));
+  url.searchParams.set("nickname", nickname);
+  const matchId = getEffectiveMatchId();
+  if (matchId) {
+    url.searchParams.set("match_id", matchId);
+  }
+
+  let payload;
+  try {
+    payload = await fetchJson(
+      url,
+      { Accept: "application/json" },
+      asFiniteNumber(CONFIG.LIVE_WINPROB_FETCH_TIMEOUT_MS)
+    );
+  } catch (error) {
+    if (isNoActiveMatchError(error)) {
+      return {
+        ok: true,
+        no_active_match: true,
+        dynamic_win_probability: null
+      };
+    }
+    throw error;
+  }
+
+  if (!isPlainObject(payload)) {
+    throw new Error("Réponse live win probability invalide.");
+  }
+
+  if (payload.ok === false) {
+    if (isNoActiveMatchPayload(payload)) {
+      return {
+        ...payload,
+        no_active_match: true,
+        dynamic_win_probability: null
+      };
+    }
+    throw new Error(String(payload.error || "Calcul live win probability impossible."));
   }
 
   const returnedMatchId = String(payload.match_id || payload.matchId || "").trim();
@@ -415,33 +537,59 @@ function getEffectiveMatchId() {
 function renderBadgePremier(eloValue, options = {}) {
   const isUnranked = Boolean(options.unranked);
   const safeElo = asFiniteNumber(eloValue);
-  const color = isUnranked ? "#A0A0A0" : getEloColor(safeElo);
-  const eloLabel = isUnranked
-    ? "UNRANKED"
-    : Number.isFinite(safeElo)
-    ? Math.round(safeElo).toLocaleString("fr-FR")
-    : "N/A";
-
-  if (DOM.premierMiniBadge && DOM.premierMiniBadgeValue) {
-    DOM.premierMiniBadge.hidden = !isUnranked;
-    DOM.premierMiniBadgeValue.textContent = "UNRANKED";
+  if (!DOM.premierMiniSlot) {
+    return;
   }
 
-  if (DOM.premierMiniValue) {
-    DOM.premierMiniValue.hidden = isUnranked;
-    DOM.premierMiniValue.textContent = eloLabel;
-    DOM.premierMiniValue.style.color = color;
-    DOM.premierMiniValue.style.textShadow = `0 0 10px ${toRgba(color, 0.75)}`;
+  if (isUnranked) {
+    const color = "#A0A0A0";
+    DOM.premierMiniSlot.dataset.premierState = "unranked";
+    DOM.premierMiniSlot.dataset.premierValue = "";
+    try {
+      DOM.premierMiniSlot.innerHTML = `
+        <div class="premier-mini-badge" style="--premier-glow:${toRgba(color, 0.52)};">
+          ${buildPremierBadgeSvg("UNRANKED", color)}
+        </div>
+      `;
+    } catch {
+      renderBadgePremierFallback("UNRANKED");
+    }
+    return;
   }
 
-  if (DOM.premierBadgeContainer) {
-    const badgeHtml = `
-      <div class="premier-svg-badge" style="--elo-color:${color}; --elo-glow:${toRgba(color, 0.58)};">
-        ${buildPremierBadgeSvg(eloLabel, color)}
-      </div>
-    `;
-    DOM.premierBadgeContainer.innerHTML = badgeHtml;
+  if (Number.isFinite(safeElo)) {
+    const color = getEloColor(safeElo);
+    const eloLabel = formatIntFr(Math.round(safeElo));
+    DOM.premierMiniSlot.dataset.premierState = "ranked";
+    DOM.premierMiniSlot.dataset.premierValue = String(Math.round(safeElo));
+
+    try {
+      DOM.premierMiniSlot.innerHTML = `
+        <div class="premier-mini-badge" style="--premier-glow:${toRgba(color, 0.6)};">
+          ${buildPremierBadgeSvg(eloLabel, color)}
+        </div>
+      `;
+    } catch {
+      renderBadgePremierFallback(eloLabel, color);
+    }
+    return;
   }
+
+  DOM.premierMiniSlot.dataset.premierState = "na";
+  DOM.premierMiniSlot.dataset.premierValue = "";
+  renderBadgePremierFallback("N/A");
+}
+
+function renderBadgePremierFallback(label, color = "#A0A0A0") {
+  if (!DOM.premierMiniSlot) {
+    return;
+  }
+  const safeLabel = escapeHtml(label);
+  DOM.premierMiniSlot.innerHTML = `
+    <span class="premier-mini-value" style="color:${color};text-shadow:0 0 10px ${toRgba(color, 0.75)};">
+      ${safeLabel}
+    </span>
+  `;
 }
 
 function renderFaceitProfile(data) {
@@ -502,6 +650,13 @@ function renderWinProbability(payload) {
     return;
   }
 
+  if (payload?.no_active_match === true) {
+    DOM.winprobBadge.style.setProperty("--winprob-accent", "#888888");
+    DOM.winprobValue.textContent = "--%";
+    DOM.winprobMeta.textContent = "Aucune partie en cours";
+    return;
+  }
+
   let probability = firstFiniteNumber(
     payload?.win_probability,
     payload?.winProbability,
@@ -517,7 +672,7 @@ function renderWinProbability(payload) {
   if (!Number.isFinite(probability)) {
     DOM.winprobBadge.style.setProperty("--winprob-accent", "#888888");
     DOM.winprobValue.textContent = "--%";
-    DOM.winprobMeta.textContent = "Aucune game active";
+    DOM.winprobMeta.textContent = "Aucune partie en cours";
     return;
   }
 
@@ -544,6 +699,98 @@ function renderWinProbability(payload) {
   }
 
   DOM.winprobMeta.textContent = metaParts.join(" • ") || "Probabilité calculée";
+}
+
+function renderLiveWinProbability(payload) {
+  if (!DOM.liveWinprobBadge || !DOM.liveWinprobValue || !DOM.liveWinprobMeta) {
+    return;
+  }
+
+  if (payload?.no_active_match === true) {
+    DOM.liveWinprobBadge.style.setProperty("--winprob-accent", "#888888");
+    DOM.liveWinprobValue.textContent = "--%";
+    DOM.liveWinprobMeta.textContent = "Aucune partie en cours";
+    return;
+  }
+
+  let probability = firstFiniteNumber(
+    payload?.dynamic_win_probability,
+    payload?.dynamicWinProbability,
+    payload?.dynamic_win_probability_pct,
+    payload?.dynamicWinProbabilityPct
+  );
+
+  if (Number.isFinite(probability) && probability > 1 && probability <= 100) {
+    probability /= 100;
+  }
+
+  if (!Number.isFinite(probability)) {
+    DOM.liveWinprobBadge.style.setProperty("--winprob-accent", "#888888");
+    DOM.liveWinprobValue.textContent = "--%";
+    DOM.liveWinprobMeta.textContent = "Live indisponible";
+    return;
+  }
+
+  const clamped = Math.max(0, Math.min(1, probability));
+  const pct = clamped * 100;
+  const accent = getWinprobColor(pct);
+  const scoreOur = asFiniteNumber(payload?.score_our ?? payload?.scoreOur);
+  const scoreEnemy = asFiniteNumber(payload?.score_enemy ?? payload?.scoreEnemy);
+  const ourTeam = String(payload?.our_team || payload?.ourTeam || "").trim();
+  const enemyTeam = String(payload?.enemy_team || payload?.enemyTeam || "").trim();
+  const scoreSource = String(payload?.score_source || payload?.scoreSource || "").trim();
+
+  DOM.liveWinprobBadge.style.setProperty("--winprob-accent", accent);
+  DOM.liveWinprobValue.textContent = `${pct.toFixed(1).replace(".", ",")}%`;
+
+  const metaParts = [];
+  if (Number.isFinite(scoreOur) && Number.isFinite(scoreEnemy)) {
+    const leftTeam = ourTeam || "Nous";
+    const rightTeam = enemyTeam || "Adversaire";
+    metaParts.push(`${leftTeam} ${Math.round(scoreOur)}-${Math.round(scoreEnemy)} ${rightTeam}`);
+  }
+  if (scoreSource) {
+    metaParts.push(`source: ${scoreSource}`);
+  }
+
+  DOM.liveWinprobMeta.textContent = metaParts.join(" • ") || "Live update";
+}
+
+async function refreshLiveWinProbability(options = {}) {
+  if (!shouldShowWinprob() || !shouldShowLiveWinprob()) {
+    return;
+  }
+  if (isLiveWinprobRefreshing) {
+    return;
+  }
+
+  const withLoader = Boolean(options.withLoader);
+  const clearError = options.clearError !== false;
+
+  isLiveWinprobRefreshing = true;
+  if (withLoader) {
+    setSectionLoading("winprob", true);
+  }
+  if (clearError) {
+    setSectionError("winprob", "");
+  }
+
+  try {
+    const payload = await fetchLiveWinProbability();
+    renderLiveWinProbability(payload);
+  } catch (error) {
+    if (isNoActiveMatchError(error)) {
+      renderLiveWinProbability({ no_active_match: true });
+      return;
+    }
+    renderLiveWinProbability(null);
+    setSectionError("winprob", toFriendlyError(error));
+  } finally {
+    if (withLoader) {
+      setSectionLoading("winprob", false);
+    }
+    isLiveWinprobRefreshing = false;
+  }
 }
 
 function getEloColor(eloValue) {
@@ -596,8 +843,9 @@ function buildPremierBadgeSvg(eloLabel, baseHexColor) {
   const textColor = shiftHexColor(baseHexColor, 130);
   const escapedElo = escapeHtml(eloLabel);
   const labelLength = String(eloLabel || "").length;
-  const textSize = labelLength >= 8 ? 18 : labelLength >= 6 ? 24 : 35;
-  const textLetterSpacing = labelLength >= 8 ? 0.6 : 1.05;
+  const isUnrankedLabel = String(eloLabel || "").toUpperCase() === "UNRANKED";
+  const textSize = isUnrankedLabel ? 24 : labelLength >= 8 ? 24 : labelLength >= 6 ? 30 : 40;
+  const textLetterSpacing = isUnrankedLabel ? 0.45 : labelLength >= 8 ? 0.7 : 1.05;
 
   return `
     <svg class="premier-badge-svg" width="178" height="64" viewBox="0 0 178 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CS2 Premier ELO ${escapedElo}">
@@ -673,6 +921,30 @@ function stopAutoRefresh() {
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = null;
+  }
+}
+
+function startLiveWinprobRefresh() {
+  stopLiveWinprobRefresh();
+
+  if (!shouldShowWinprob() || !shouldShowLiveWinprob()) {
+    return;
+  }
+
+  const interval = asFiniteNumber(CONFIG.LIVE_WINPROB_INTERVAL_MS);
+  if (!Number.isFinite(interval) || interval <= 0) {
+    return;
+  }
+
+  liveWinprobTimer = setInterval(() => {
+    void refreshLiveWinProbability({ withLoader: false, clearError: false });
+  }, interval);
+}
+
+function stopLiveWinprobRefresh() {
+  if (liveWinprobTimer) {
+    clearInterval(liveWinprobTimer);
+    liveWinprobTimer = null;
   }
 }
 
@@ -961,6 +1233,10 @@ function shouldShowWinprob() {
   return Boolean(CONFIG.WINPROB_ENABLED);
 }
 
+function shouldShowLiveWinprob() {
+  return Boolean(CONFIG.LIVE_WINPROB_ENABLED);
+}
+
 function escapeCssUrl(value) {
   return String(value || "")
     .replace(/\\/g, "\\\\")
@@ -1048,73 +1324,24 @@ function toHex(value) {
 
 function escapeHtml(value) {
   return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("\"", "&quot;")
-    .replaceAll("'", "&#39;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-function extractPremierElo(profile) {
-  const ranksPremier = profile?.ranks?.premier;
-  const candidates = [];
-
-  if (isPlainObject(ranksPremier)) {
-    candidates.push(ranksPremier.elo, ranksPremier.rating, ranksPremier.value, ranksPremier.score);
-  } else {
-    candidates.push(ranksPremier);
+function formatIntFr(value) {
+  const number = asFiniteNumber(value);
+  if (!Number.isFinite(number)) {
+    return "--";
   }
 
-  candidates.push(
-    profile?.ranks?.premier_elo,
-    profile?.ranks?.premierElo,
-    profile?.rating?.premier,
-    profile?.premier_elo,
-    profile?.premierElo,
-    profile?.premier?.elo,
-    profile?.premier?.rating,
-    profile?.premier?.value
-  );
-
-  for (const candidate of candidates) {
-    const value = asFiniteNumber(candidate);
-    if (Number.isFinite(value)) {
-      return { value, source: "ranks" };
-    }
+  try {
+    return Math.round(number).toLocaleString("fr-FR");
+  } catch {
+    return String(Math.round(number));
   }
-
-  const recentMatchRank = extractPremierFromRecentMatches(profile);
-  if (Number.isFinite(recentMatchRank)) {
-    return { value: recentMatchRank, source: "recent_matches" };
-  }
-
-  return { value: Number.NaN, source: "unavailable" };
-}
-
-function extractPremierFromRecentMatches(profile) {
-  const recentMatches = Array.isArray(profile?.recent_matches) ? profile.recent_matches : [];
-
-  for (const match of recentMatches) {
-    const rank = asFiniteNumber(match?.rank);
-    if (!Number.isFinite(rank) || rank <= 0) {
-      continue;
-    }
-
-    const rankType = asFiniteNumber(match?.rank_type);
-    const dataSource = String(match?.data_source || "").trim().toLowerCase();
-
-    // rank_type=11 correspond aux entrées Premier observées dans l'API publique.
-    if (rankType === 11) {
-      return rank;
-    }
-
-    // Fallback prudent si rank_type est absent mais source matchmaking avec rang élevé.
-    if ((dataSource === "matchmaking" || dataSource === "premier") && rank >= 1000) {
-      return rank;
-    }
-  }
-
-  return Number.NaN;
 }
 
 function asFiniteNumber(value) {
@@ -1144,6 +1371,50 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isNoActiveMatchPayload(payload) {
+  if (!isPlainObject(payload)) {
+    return false;
+  }
+
+  if (matchesNoActiveMatchText(payload.error) || matchesNoActiveMatchText(payload.message)) {
+    return true;
+  }
+
+  const detail = payload.detail;
+  if (isPlainObject(detail)) {
+    return matchesNoActiveMatchText(detail.error) || matchesNoActiveMatchText(detail.message);
+  }
+
+  if (typeof detail === "string") {
+    return matchesNoActiveMatchText(detail);
+  }
+
+  return false;
+}
+
+function isNoActiveMatchError(error) {
+  const message =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+      ? error.message
+      : String(error || "");
+
+  return matchesNoActiveMatchText(message);
+}
+
+function matchesNoActiveMatchText(value) {
+  const text = String(value || "").toLowerCase();
+  if (!text) {
+    return false;
+  }
+  return (
+    text.includes("aucune partie en cours") ||
+    text.includes("no ongoing match") ||
+    text.includes("no match in progress")
+  );
+}
+
 function toFriendlyError(error) {
   if (!error) {
     return "Erreur inconnue.";
@@ -1155,6 +1426,10 @@ function toFriendlyError(error) {
       : error instanceof Error && error.message
       ? error.message
       : "Erreur API.";
+
+  if (matchesNoActiveMatchText(message)) {
+    return "Aucune partie en cours";
+  }
 
   if (/failed to fetch|load failed|networkerror|echec reseau|échec réseau|cors/i.test(message)) {
     return "Échec réseau/CORS. Utilisez un proxy local (PROXY_BASE_URL).";
