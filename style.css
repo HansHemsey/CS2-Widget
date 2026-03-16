@@ -38,6 +38,10 @@ body {
   padding: 0;
 }
 
+.widget--v2 {
+  width: min(100%, 480px);
+}
+
 .widget__header {
   display: none !important;
 }
@@ -382,6 +386,10 @@ body {
 
 .winprob-section {
   margin-top: 8px;
+}
+
+.widget--v2 .winprob-section {
+  margin-top: 0;
 }
 
 .section-error--inline-block {

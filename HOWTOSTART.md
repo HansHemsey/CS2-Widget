@@ -84,11 +84,62 @@ Dans le navigateur:
 http://127.0.0.1:5500/index.html?nickname=TON_NICKNAME_FACEIT
 ```
 
+Version Win Probability only (v2):
+
+```text
+http://127.0.0.1:5500/index-v2.html?nickname=TON_NICKNAME_FACEIT
+```
+
 Exemple:
 
 ```text
 http://127.0.0.1:5500/index.html?nickname=ejzboob
 ```
+
+## 6-bis) Ouvrir le widget depuis un autre PC (meme reseau local)
+
+Exemple si le PC serveur a l'IP `192.168.1.70`:
+
+1. Dans `.env` (sur le PC serveur):
+
+```env
+HOST=0.0.0.0
+PORT=8787
+```
+
+2. Demarrer le proxy normalement:
+
+```bash
+node proxy-server.mjs
+```
+
+3. Demarrer le serveur statique en ecoute reseau:
+
+```bash
+python3 -m http.server 5500 --bind 0.0.0.0
+```
+
+4. Depuis l'autre PC, ouvrir:
+
+```text
+http://192.168.1.70:5500/index.html?nickname=TON_NICKNAME_FACEIT
+```
+
+Ou la vue v2 (Win Probability only):
+
+```text
+http://192.168.1.70:5500/index-v2.html?nickname=TON_NICKNAME_FACEIT
+```
+
+5. Test utile depuis l'autre PC:
+
+```text
+http://192.168.1.70:8787/health
+```
+
+Notes:
+- `script.js` et `script-v2.js` utilisent automatiquement le meme host que la page widget pour le proxy.
+- Si ca ne repond pas, verifier le pare-feu (ports 5500 et 8787).
 
 ## 7) Optionnel - UI Streamlit (generateur d'URL)
 

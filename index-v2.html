@@ -1,0 +1,38 @@
+<!-- index-v2.html - Vue compacte du widget (Win Probability uniquement). -->
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Widget CS2 Win Probability</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&family=Rajdhani:wght@500;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="./style.css?v=20260316-v2" />
+</head>
+<body>
+  <main class="widget widget--v2" aria-live="polite">
+    <section id="winprob-section" class="winprob-section" aria-busy="false" aria-label="Probabilité de victoire">
+      <span id="winprob-loader" class="section-loader" hidden>Chargement…</span>
+      <p id="winprob-error" class="section-error section-error--inline-block" hidden></p>
+      <div class="winprob-grid">
+        <div id="winprob-badge" class="winprob-badge">
+          <span class="winprob-badge__label">PRE-MATCH WIN PROBABILITY</span>
+          <span id="winprob-value" class="winprob-badge__value">--%</span>
+          <span id="winprob-meta" class="winprob-badge__meta">Aucune partie en cours</span>
+        </div>
+        <div id="live-winprob-badge" class="winprob-badge winprob-badge--live">
+          <span class="winprob-badge__label"><span class="live-dot" aria-hidden="true"></span>LIVE WIN PROBABILITY</span>
+          <span id="live-winprob-value" class="winprob-badge__value">--%</span>
+          <span id="live-winprob-meta" class="winprob-badge__meta">Aucune partie en cours</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="./script-v2.js?v=20260316-v1" defer></script>
+</body>
+</html>
